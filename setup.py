@@ -22,9 +22,6 @@ setup(
     author_email='dr.mote@gmail.com',
     classifiers=CLASSIFIERS,
     zip_safe=False,
-    install_requires=[
-        'vext.libtorrent',
-    ],
     packages=find_packages(),
     entry_points="""
     [console_scripts]
