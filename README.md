@@ -7,10 +7,16 @@ Magnet2Torrent - Convert magnet links to torrent files
 
 ### How do I get set up? ###
 
-setup.py install
+pip install -e git+https://github.com/dekomote/magnet2torrent.git\#egg\=magnet2torrent
+
+or 
+
+clone and do setup.py install.
+
 You need libtorrent python bindings installed or vext.libtorrent
 
 ### How do I run it? ###
 
 Check usage:
+
 ./magnet2torrent -h
