@@ -20,3 +20,5 @@ You need libtorrent python bindings installed or vext.libtorrent
 Check usage:
 
 ./magnet2torrent -h
+
+Additionally, setting MAGNET2TORRENT_SAVE_PATH env will save the torrent files to that location

@@ -101,8 +101,8 @@ def run():
 
     # No dir provided, save in home folder
     if not args.dir:
-        from os.path import expanduser
-        args.dir = expanduser("~")
+        args.dir = os.getenv("MAGNET2TORRENT_SAVE_PATH",
+            os.path.expanduser("~"))
 
     # Make handle url partial so we can call it in a worker pool
     pool_size = args.process_pool
