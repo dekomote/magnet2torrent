@@ -14,7 +14,7 @@ with open(os.path.join(os.path.dirname(__file__), 'README.md')) as f:
 
 setup(
     name='magnet2torrent',
-    version="0.1.0",
+    version="0.5.0",
 
     description='Magnet URL to Torrent File',
     long_description=long_description,

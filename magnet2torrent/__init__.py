@@ -1,19 +1,51 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -
 
+'''
+    BSD 3-Clause License
+    Copyright (c) 2017, Dejan Noveski
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright notice, this
+      list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above copyright notice,
+      this list of conditions and the following disclaimer in the documentation
+      and/or other materials provided with the distribution.
+
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived from
+      this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+    OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+'''
+
 from __future__ import print_function, unicode_literals
 import argparse
 import logging
 import os
 import sys
 import tempfile
+import shutil
 import time
 from functools import partial
 from multiprocessing import Pool, Process, get_logger, log_to_stderr
-import libtorrent as lt
+import libtorrent
 
 
-logger = logging.getLogger('MAGNET2TORRENT')
+log = logging.getLogger(__name__)
 
 def setup_args():
     """Setup and parse the command line arguments
@@ -23,7 +55,7 @@ def setup_args():
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('magnet_urls', metavar='URL', type=str,
-        nargs='+', help='List of urls to parse')
+                        nargs='+', help='List of urls to parse')
     parser.add_argument(
         "-d", "--dir",
         help="Save torrent files to specified directory instead of pushing it to stdout")
@@ -41,53 +73,54 @@ def setup_args():
 
 
 
-def handle_url(url, dir, timeout=20):
-    """Given a magnet url and a dir, handle the url - write the torrent file to the dir.
+def handle_url(url, directory, timeout=20, temp_path=tempfile.mkdtemp()):
+    """Given a magnet url and a directory, handle the url - write the torrent file to the directory.
 
     Args:
         url (str): Magnet URL (full)
-        dir (str): local directory
+        directory (str): local directory
         timeout (int): Timeout after seconds
     """
-    logger = logging.getLogger('MAGNET2TORRENT')
 
-    logger.info("Opening session for link %s", url)
-    session = lt.session()
-    temp_path = tempfile.gettempdir()
+    log.info("Opening session for link %s", url)
 
+    session = libtorrent.session()
     params = {
+        'url': url,
         'save_path': temp_path,
-        'duplicate_is_error': False,
+        'duplicate_is_error': True,
+        'storage_mode': libtorrent.storage_mode_t(2),
+        'paused': False,
+        'auto_managed': True,
     }
 
-    handle = lt.add_magnet_uri(session, url, params)
+    handle = session.add_torrent(params)
 
-    logger.info("Waiting metadata for %s", url)
+    log.info("Waiting metadata")
     tout = 0
-    while (not handle.has_metadata()):
-        time.sleep(.1)
-        tout += 0.1
-        if tout >= timeout:
-            logger.error("Waiting metadata timed out for %s", url)
-            return
+    while not handle.has_metadata():
+        time.sleep(1)
+        tout += 1
+        if tout > timeout:
+            log.error("Metadata retrieval timeout. Bump -t")
+            return None
+    session.pause()
 
-    logger.info("Metadata for %s retrieved", url)
+    log.info("Metadata retrieved")
     torrent_info = handle.get_torrent_info()
 
-    fs = lt.file_storage()
-    for file in torrent_info.files():
-        fs.add_file(file)
-    torrent_file = lt.create_torrent(fs)
+    torrent_file = libtorrent.create_torrent(torrent_info)
     torrent_file.set_comment(torrent_info.comment())
     torrent_file.set_creator(torrent_info.creator())
 
-    file_path = os.path.join(dir, "%s.torrent" % torrent_info.info_hash())
+    file_path = os.path.join(directory, "%s.torrent" % torrent_info.name())
 
-    with open(file_path, 'wb') as f:
-        f.write(lt.bencode(torrent_file.generate()))
-        f.close()
+    with open(file_path, 'wb') as f_handle:
+        f_handle.write(libtorrent.bencode(torrent_file.generate()))
+        f_handle.close()
 
-    logger.info("Torrent file saved to %s", file_path)
+    session.remove_torrent(handle)
+    log.info("Torrent file saved to %s", file_path)
 
 
 def run():
@@ -97,28 +130,31 @@ def run():
     args = setup_args()
 
     # Setup logging
-    logger.setLevel(getattr(logging, args.loglevel.upper()))
+    log.setLevel(getattr(logging, args.loglevel.upper()))
 
     # No dir provided, save in home folder
     if not args.dir:
         args.dir = os.getenv("MAGNET2TORRENT_SAVE_PATH",
-            os.path.expanduser("~"))
+                             os.path.expanduser("~"))
 
     # Make handle url partial so we can call it in a worker pool
     pool_size = args.process_pool
     if len(args.magnet_urls) < pool_size:
         pool_size = len(args.magnet_urls)
-    pool = Pool(pool_size)
-    handler = partial(handle_url, dir=args.dir, timeout=args.timeout)
 
+    temp_dir = tempfile.mkdtemp()
+    pool = Pool(pool_size)
+    handler = partial(handle_url, directory=args.dir, timeout=args.timeout, temp_path=temp_dir)
     # Handle interrupt and fill in the pool
     try:
         res = pool.map_async(handler, args.magnet_urls)
         res.get(args.timeout + 5)
     except KeyboardInterrupt:
-        logger.warning("Caught KeyboardInterrupt, terminating workers")
+        log.warning("Terminating workers")
+        shutil.rmtree(temp_dir)
         pool.terminate()
     else:
-        logger.debug("Pool closing")
+        shutil.rmtree(temp_dir)
+        log.debug("Pool closing")
         pool.close()
     pool.join()
